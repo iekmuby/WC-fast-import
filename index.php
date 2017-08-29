@@ -125,18 +125,41 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 				$category_slug
 			);
 			
+			//Store product category taxonomy name
+			if (!isset($post_data['terms_taxonomies'][$category_slug])) {
+				$post_data['terms_taxonomies'][$category_slug] = 'product_cat';
+			}
+			
 			//Add product type (product types is taxonomy term)
 			$post_data['post_terms'][$sku][] = array(
 				'external',
-				'external'
+				'external',
+				'product_type'
 			);
+			
+			//Store product type taxonomy name
+			if (!isset($post_data['terms_taxonomies']['simple'])) {
+				$post_data['terms_taxonomies']['simple'] = 'product_type';
+			}
+			
+			if (!isset($post_data['terms_taxonomies']['grouped'])) {
+				$post_data['terms_taxonomies']['grouped'] = 'product_type';
+			}
+			
+			if (!isset($post_data['terms_taxonomies']['variable'])) {
+				$post_data['terms_taxonomies']['variable'] = 'product_type';
+			}
+			
+			if (!isset($post_data['terms_taxonomies']['external'])) {
+				$post_data['terms_taxonomies']['external'] = 'product_type';
+			}
 			
 			//Collect unique categories
 			$category_slug = convert_to_slug($data[10]);
 			if (!in_array_r($data[10], $post_data['terms'])) {
 				$post_data['terms'][$sku][] = array(
 					$data[10],
-					$category_slug
+					$category_slug,
 				);
 			}
 			
@@ -146,6 +169,11 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 					$data[21],
 					convert_to_slug($data[21])
 				);
+				
+				//Store product attribute taxonomy name
+				if (!isset($post_data['terms_taxonomies'][convert_to_slug($data[21])])) {
+					$post_data['terms_taxonomies'][convert_to_slug($data[21])] = 'pa_brand';
+				}
 				
 				if (!in_array_r($data[21], $post_data['terms'])) {
 					$post_data['terms'][$sku][] = array(
@@ -182,6 +210,11 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 					convert_to_slug($data[22])
 				);
 				
+				//Store product attribute taxonomy name
+				if (!isset($post_data['terms_taxonomies'][convert_to_slug($data[22])])) {
+					$post_data['terms_taxonomies'][convert_to_slug($data[22])] = 'pa_color';
+				}
+				
 				if (!in_array_r($data[22], $post_data['terms'])) {
 					$post_data['terms'][$sku][] = array(
 						$data[22],
@@ -213,7 +246,7 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 		}
 		$row++;
 		
-		if ($row > 1001) {
+		if ($row > 1000) {
 			//err($post_data);
 			//Insert our rows
 			$post_insert_data = prepare_multi_insert_data($post_fields, $post_data['posts']);
@@ -240,9 +273,8 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 					unset($skus[$clean_sku]);
 				}
 			}
-
-//Insert meta			
-			//Insert terms
+//TODO convert to right insert format with function prepare_multi_insert_data
+			//Insert meta			
 			$meta_keys = array(
 				'post_id',
 				'meta_key',
@@ -278,8 +310,8 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 			}
 			$pdo->commit();
 			
-//Insert taxonomies			
-			//Select all categories and check, if current products categories is missing
+			//Insert taxonomies
+			//Select all terms and check, if current terms is missing
 			$missing_terms = array();
 /* S */		$sql = 'SELECT term_id, name, slug FROM wp_terms';
 			$stmt = $pdo->prepare($sql);
@@ -299,7 +331,7 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 				}
 			}
 
-			//Insert missing categories, if needed
+			//Insert missing terms, if needed
 			if (count($missing_terms) > 0) {
 				$terms_insert_data = prepare_multi_insert_data(array_keys(reset($missing_terms)), $missing_terms);
 				$pdo->beginTransaction();				
@@ -312,21 +344,23 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 				}
 				$pdo->commit();
 			}
-			
+
 			//Select categories again with new terms
 /* S */		$sql = 'SELECT term_id, name, slug FROM wp_terms';
 			$stmt = $pdo->prepare($sql);
-			//$stmt->execute(array('product_cat', 'product_type'));
 			$stmt->execute();
 			while ($res = $stmt->fetch()) {
+				$res['taxonomy'] = $post_data['terms_taxonomies'][$res['slug']];
 				$wp_terms[$res['slug']] = $res;
 			}
 
 			//Select term taxonomy from wp_term_relationships
 			$wp_term_taxonomy = $missing_wp_term_taxonomy = array();
 /* S */		$sql = 'SELECT term_taxonomy_id, term_id, taxonomy FROM wp_term_taxonomy WHERE taxonomy IN(?, ?)';
+/* S */		$sql = 'SELECT term_taxonomy_id, term_id, taxonomy FROM wp_term_taxonomy';
 			$stmt = $pdo->prepare($sql);
-			$stmt->execute(array('product_cat', 'product_type'));
+			//$stmt->execute(array('product_cat', 'product_type'));
+			$stmt->execute();
 			while ($res = $stmt->fetch()) {
 				$wp_term_taxonomy[$res['term_id'] . '-' . $res['taxonomy']] = $res;
 			}
@@ -337,7 +371,7 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 					continue;
 				}
 
-				$taxonomy = in_array($term_data['slug'], array('simple', 'grouped', 'variable', 'external')) ? 'product_type' : 'product_cat';
+				$taxonomy = $term_data['taxonomy'];
 				if (!isset($wp_term_taxonomy[$term_data['term_id'] . '-' . $taxonomy])) {
 					$missing_wp_term_taxonomy[] = array(
 						'term_id'	=> $term_data['term_id'],
@@ -366,9 +400,9 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 
 			//Select term taxonomy again with new items
 			$wp_term_taxonomy = $missing_wp_term_taxonomy = array();
-/* S */		$sql = 'SELECT term_taxonomy_id, term_id, taxonomy FROM wp_term_taxonomy WHERE taxonomy IN(?, ?)';
+/* S */		$sql = 'SELECT term_taxonomy_id, term_id, taxonomy FROM wp_term_taxonomy';
 			$stmt = $pdo->prepare($sql);
-			$stmt->execute(array('product_cat', 'product_type'));
+			$stmt->execute();
 			while ($res = $stmt->fetch()) {
 				$wp_term_taxonomy[$res['term_id'] . '-' . $res['taxonomy']] = $res;
 			}
@@ -384,11 +418,11 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 
 			foreach ($post_data['post_terms'] as $sku => $terms_data) {
 				foreach ($terms_data as $term_data) {
-					if ($term_data['slug'] == 'uncategorized') {
+					if ($term_data[1] == 'uncategorized') {
 						continue;
 					}
 
-					$taxonomy = in_array($term_data[1], array('simple', 'grouped', 'variable', 'external')) ? 'product_type' : 'product_cat';
+					$taxonomy = $post_data['terms_taxonomies'][$term_data[1]];
 					if (!isset($wp_term_relationships[$skus[$sku] . '-' . $wp_terms[$term_data[1]]])) {
 						$missing_wp_term_relationships[] = array(
 							'object_id'			=> $skus[$sku],
@@ -421,7 +455,7 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 			}
 			
 			//Insert options
-			//First, create serialized object for attributes
+			//First, select existing taxonomies
 			$product_attributes = $missing_attributes = array();
 /* S */		$sql = 'SELECT attribute_id, attribute_name FROM wp_woocommerce_attribute_taxonomies';
 			$stmt = $pdo->prepare($sql);
@@ -476,12 +510,13 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 			$stmt = $pdo->prepare($sql);
 			$stmt->execute(array('_transient_wc_attribute_taxonomies'));
 			if ($wc_attribute_taxonomies = $stmt->fetch()) {
+				//var_dump($wc_attribute_taxonomies);die;
 				$wc_attribute_taxonomies = unserialize($wc_attribute_taxonomies);
 				foreach ($product_attributes as $product_attribute) {
-					$is_exist = 0;
+					$is_exists = 0;
 					foreach ($wc_attribute_taxonomies as $wc_attribute_taxonomy) {
 						if ($product_attribute['attribute_name'] == $wc_attribute_taxonomy->attribute_name) {
-							$is_exist = 1;
+							$is_exists = 1;
 						}
 					}
 					
@@ -491,7 +526,7 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 							'attribute_name' => $product_attribute['attribute_name'],
 							'attribute_label' => $product_attribute['attribute_label'],
 							'attribute_type' => $product_attribute['attribute_type'],
-							'attribute_orderby' => $product_attribute['attribute_order_by'],
+							'attribute_orderby' => $product_attribute['attribute_orderby'],
 							'attribute_public' => $product_attribute['attribute_public']
 						);
 					}
@@ -533,8 +568,6 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 			}
 			$pdo->commit();
 
-			err($post_data);
-			
 			//Print execution time
 			printf('Executed in %d seconds. %d rows processed. Used %dMb of memory', (time() - $start_date), $row, (memory_get_peak_usage(false)/1024/1024));
 			die;
