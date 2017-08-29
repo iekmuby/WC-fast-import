@@ -1,7 +1,7 @@
 <?php
 ////Stat
-//Inserts 6
-//Selects 6
+//Inserts 8
+//Selects 10
 
 function err($data, $die = 1) {
 	echo '<pre>';
@@ -13,7 +13,7 @@ function err($data, $die = 1) {
 
 //Convert text to slug format
 function convert_to_slug($text) {
-	return strtolower(str_replace(' ', '-', preg_replace("/[^A-Za-z ]/", '', $text)));
+	return strtolower(str_replace(' ', '-', preg_replace("/[^0-9A-Za-z ]/", '', $text)));
 }
 
 //Find data in multi array
@@ -109,13 +109,13 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 			
 			//Collect post meta data
 			$post_data['meta'][$sku] = array(
-				'_visibility'		=> 'visible',
-				'_stock_status' 	=> ($data[30] == 1 ) ? 'instock' : 'outofstock',
-				'_product_url'		=> $data[0],
-				'_regular_price'	=> $data[7],
-				'_price'			=> $data[7],
-				'_sale_price'		=> $data[7] - 10,
-				'_sku'				=> $data[2]
+				'_visibility'			=> 'visible',
+				'_stock_status' 		=> ($data[30] == 1 ) ? 'instock' : 'outofstock',
+				'_product_url'			=> $data[0],
+				'_regular_price'		=> $data[7],
+				'_price'				=> $data[7],
+				'_sale_price'			=> $data[7] - 10,
+				'_sku'					=> $data[2],
 			);
 			
 			//Collect category data
@@ -139,10 +139,82 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 					$category_slug
 				);
 			}
+			
+			//Add product attributes
+			if (!empty($data[21])) {
+				$post_data['post_terms'][$sku][] = array(
+					$data[21],
+					convert_to_slug($data[21])
+				);
+				
+				if (!in_array_r($data[21], $post_data['terms'])) {
+					$post_data['terms'][$sku][] = array(
+						$data[21],
+						convert_to_slug($data[21])
+					);
+				}
+				
+				if (!isset($post_data['attributes']['brand'])) {
+					$post_data['attributes']['brand'] = array(
+						'name'	=> 'Brand',
+						'slug'	=> 'brand'
+					);
+				}
+				
+				$product_attributes = isset($post_data['meta'][$sku]['_product_attributes']) ? unserialize($post_data['meta'][$sku]['_product_attributes']) : array();
+				if (!isset($product_attributes['pa_brand'])) {
+					$product_attributes['pa_brand'] = array (
+						'name' => 'pa_brand',
+						'value' => '',
+						'position' => '0',
+						'is_visible' => 0,
+						'is_variation' => 0,
+						'is_taxonomy' => 1,
+					);
+					$post_data['meta'][$sku]['_product_attributes'] = serialize($product_attributes);
+					$post_data['options']['pa_' . $post_data['attributes']['brand']['slug'] . '_children'] = serialize(array());
+				}
+			}
+			
+			if (!empty($data[22])) {				
+				$post_data['post_terms'][$sku][] = array(
+					$data[22],
+					convert_to_slug($data[22])
+				);
+				
+				if (!in_array_r($data[22], $post_data['terms'])) {
+					$post_data['terms'][$sku][] = array(
+						$data[22],
+						convert_to_slug($data[22])
+					);
+				}
+				
+				if (!isset($post_data['attributes']['color'])) {
+					$post_data['attributes']['color'] = array(
+						'name'	=> 'Color',
+						'slug'	=> 'color'
+					);
+				}
+				
+				$product_attributes = isset($post_data['meta'][$sku]['_product_attributes']) ? unserialize($post_data['meta'][$sku]['_product_attributes']) : array();
+				if (!isset($product_attributes['pa_color'])) {
+					$product_attributes['pa_color'] = array (
+						'name' => 'pa_color',
+						'value' => '',
+						'position' => '0',
+						'is_visible' => 0,
+						'is_variation' => 0,
+						'is_taxonomy' => 1,
+					);
+					$post_data['meta'][$sku]['_product_attributes'] = serialize($product_attributes);
+					$post_data['options']['pa_' . $post_data['attributes']['color']['slug'] . '_children'] = serialize(array());
+				}
+			}
 		}
 		$row++;
 		
 		if ($row > 1001) {
+			//err($post_data);
 			//Insert our rows
 			$post_insert_data = prepare_multi_insert_data($post_fields, $post_data['posts']);
 			$pdo->beginTransaction();				
@@ -168,7 +240,8 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 					unset($skus[$clean_sku]);
 				}
 			}
-			
+
+//Insert meta			
 			//Insert terms
 			$meta_keys = array(
 				'post_id',
@@ -205,6 +278,7 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 			}
 			$pdo->commit();
 			
+//Insert taxonomies			
 			//Select all categories and check, if current products categories is missing
 			$missing_terms = array();
 /* S */		$sql = 'SELECT term_id, name, slug FROM wp_terms';
@@ -227,13 +301,9 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 
 			//Insert missing categories, if needed
 			if (count($missing_terms) > 0) {
-				$terms_keys = array(
-					'name',
-					'slug'
-				);
-				$terms_insert_data = prepare_multi_insert_data($terms_keys, $missing_terms);
+				$terms_insert_data = prepare_multi_insert_data(array_keys(reset($missing_terms)), $missing_terms);
 				$pdo->beginTransaction();				
-/* I */			$sql = 'INSERT INTO wp_terms (' . implode(', ', $terms_keys) . ') VALUES ' . $terms_insert_data['args'];
+/* I */			$sql = 'INSERT INTO wp_terms (' . implode(', ', array_keys(reset($missing_terms))) . ') VALUES ' . $terms_insert_data['args'];
 				$stmt = $pdo->prepare($sql);
 				try {
 					$stmt->execute($terms_insert_data['values']);
@@ -282,9 +352,9 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 					'taxonomy'
 				);
 
-				$term_taxonomy_insert_data = prepare_multi_insert_data($term_taxonomy_keys, $missing_wp_term_taxonomy);
+				$term_taxonomy_insert_data = prepare_multi_insert_data(array_keys(reset($missing_wp_term_taxonomy)), $missing_wp_term_taxonomy);
 				$pdo->beginTransaction();				
-/* I */			$sql = 'INSERT INTO wp_term_taxonomy (' . implode(', ', $term_taxonomy_keys) . ') VALUES ' . $term_taxonomy_insert_data['args'];
+/* I */			$sql = 'INSERT INTO wp_term_taxonomy (' . implode(', ', array_keys(reset($missing_wp_term_taxonomy))) . ') VALUES ' . $term_taxonomy_insert_data['args'];
 				$stmt = $pdo->prepare($sql);
 				try {
 					$stmt->execute($term_taxonomy_insert_data['values']);
@@ -329,14 +399,9 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 			}
 
 			if (count($missing_wp_term_relationships) > 0) {
-				$term_relation_keys = array(
-					'object_id',
-					'term_taxonomy_id'
-				);
-
-				$term_relation_insert_data = prepare_multi_insert_data($term_relation_keys, $missing_wp_term_relationships);
+				$term_relation_insert_data = prepare_multi_insert_data(array_keys(reset($missing_wp_term_relationships)), $missing_wp_term_relationships);
 				$pdo->beginTransaction();				
-/* I */			$sql = 'INSERT INTO wp_term_relationships (' . implode(', ', $term_relation_keys) . ') VALUES ' . $term_relation_insert_data['args'];
+/* I */			$sql = 'INSERT INTO wp_term_relationships (' . implode(', ', array_keys(reset($missing_wp_term_relationships))) . ') VALUES ' . $term_relation_insert_data['args'];
 				$stmt = $pdo->prepare($sql);
 				try {
 					$stmt->execute($term_relation_insert_data['values']);
@@ -347,7 +412,7 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 			}
 			
 			//Update categories count
-/* I */			$sql = 'UPDATE wp_term_taxonomy SET count = (SELECT COUNT(*) FROM wp_term_relationships rel LEFT JOIN wp_posts po ON (po.ID = rel.object_id) WHERE rel.term_taxonomy_id = wp_term_taxonomy.term_taxonomy_id AND wp_term_taxonomy.taxonomy NOT IN ("link_category") AND po.post_status IN ("publish", "future"))';
+/* I */		$sql = 'UPDATE wp_term_taxonomy SET count = (SELECT COUNT(*) FROM wp_term_relationships rel LEFT JOIN wp_posts po ON (po.ID = rel.object_id) WHERE rel.term_taxonomy_id = wp_term_taxonomy.term_taxonomy_id AND wp_term_taxonomy.taxonomy NOT IN ("link_category") AND po.post_status IN ("publish", "future"))';
 			$stmt = $pdo->prepare($sql);
 			try {
 				$stmt->execute();
@@ -355,8 +420,123 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 				echo $e->getMessage() . '<br />';
 			}
 			
+			//Insert options
+			//First, create serialized object for attributes
+			$product_attributes = $missing_attributes = array();
+/* S */		$sql = 'SELECT attribute_id, attribute_name FROM wp_woocommerce_attribute_taxonomies';
+			$stmt = $pdo->prepare($sql);
+			$stmt->execute();
+			while ($res = $stmt->fetch()) {
+				$product_attributes[$res['attribute_name']] = $res;
+			}
+
+			foreach ($post_data['attributes'] as $attribute => $attribute_data) {
+				if (count($product_attributes)>0) {
+					foreach ($product_attributes as $product_attribute) {
+						if (!isset($product_attributes[$attribute])) {
+							$missing_attributes[] = array(
+								'attribute_name'	=> $attribute,
+								'attribute_label'	=> $attribute_data['name'],
+								'attribute_type'	=> 'select'
+							);
+						}
+					}
+				} else {
+					$missing_attributes[] = array(
+						'attribute_name'	=> $attribute,
+						'attribute_label'	=> $attribute_data['name'],
+						'attribute_type'	=> 'select'
+					);
+				}
+			}
+
+			if (count($missing_attributes) > 0) {
+				$attributes_insert_data = prepare_multi_insert_data(array_keys(reset($missing_attributes)), $missing_attributes);
+				$pdo->beginTransaction();				
+/* I */			$sql = 'INSERT INTO wp_woocommerce_attribute_taxonomies (' . implode(', ', array_keys(reset($missing_attributes))) . ') VALUES ' . $attributes_insert_data['args'];
+				$stmt = $pdo->prepare($sql);
+				try {
+					$stmt->execute($attributes_insert_data['values']);
+				} catch (PDOException $e){
+					echo $e->getMessage() . '<br />';
+				}
+				$pdo->commit();
+			}
+			
+			//Select attributes again with new items
+/* S */		$sql = 'SELECT * FROM wp_woocommerce_attribute_taxonomies';
+			$stmt = $pdo->prepare($sql);
+			$stmt->execute();
+			while ($res = $stmt->fetch()) {
+				$product_attributes[$res['attribute_name']] = $res;
+			}
+			
+			//Select _transient_wc_attribute_taxonomies from options
+/* S */		$sql = 'SELECT option_value FROM wp_options WHERE option_name=?';
+			$stmt = $pdo->prepare($sql);
+			$stmt->execute(array('_transient_wc_attribute_taxonomies'));
+			if ($wc_attribute_taxonomies = $stmt->fetch()) {
+				$wc_attribute_taxonomies = unserialize($wc_attribute_taxonomies);
+				foreach ($product_attributes as $product_attribute) {
+					$is_exist = 0;
+					foreach ($wc_attribute_taxonomies as $wc_attribute_taxonomy) {
+						if ($product_attribute['attribute_name'] == $wc_attribute_taxonomy->attribute_name) {
+							$is_exist = 1;
+						}
+					}
+					
+					if ($is_exists == 0) {
+						$wc_attribute_taxonomies[] = (object) array(
+							'attribute_id' => $product_attribute['attribute_id'],
+							'attribute_name' => $product_attribute['attribute_name'],
+							'attribute_label' => $product_attribute['attribute_label'],
+							'attribute_type' => $product_attribute['attribute_type'],
+							'attribute_orderby' => $product_attribute['attribute_order_by'],
+							'attribute_public' => $product_attribute['attribute_public']
+						);
+					}
+				}
+			}
+			
+			$post_data['options']['_transient_wc_attribute_taxonomies'] = serialize($wc_attribute_taxonomies);
+			
+			//Update options or insert, if not exists
+			$options_to_insert = array();
+/* S */		$sql = 'SELECT * FROM wp_options WHERE option_name IN (' . substr(str_repeat(', ?', count($post_data['options'])), 2) . ')';
+			$stmt = $pdo->prepare($sql);
+			$stmt->execute(array_values($post_data['options']));
+			while ($res = $stmt->fetch()) {
+				$options_to_insert[$res['option_name']] = $res;
+			}
+			
+			foreach ($post_data['options'] as $k => $v) {
+				if (!isset($option_to_insert[$k])) {
+					$option_to_insert[$k] = array(
+						'option_id'		=> NULL,
+						'option_name'	=> $k,
+						'option_value'	=> $v,
+						'autoload'		=> 'yes'
+					);
+				} else {
+					$option_to_insert[$k]['option_value'] = $v;
+				}
+			}
+			
+			$options_insert_data = prepare_multi_insert_data(array_keys(reset($option_to_insert)), $option_to_insert);
+			$pdo->beginTransaction();				
+/* I */		$sql = 'INSERT INTO wp_options (' . implode(', ', array_keys(reset($option_to_insert))) . ') VALUES ' . $options_insert_data['args'] . ' ON DUPLICATE KEY UPDATE option_value=VALUES(option_value)';
+			$stmt = $pdo->prepare($sql);
+			try {
+				$stmt->execute($options_insert_data['values']);
+			} catch (PDOException $e){
+				echo $e->getMessage() . '<br />';
+			}
+			$pdo->commit();
+
+			err($post_data);
+			
 			//Print execution time
-			echo 'Executed in ' . (time() - $start_date) . ' seconds <br />';
+			printf('Executed in %d seconds. %d rows processed. Used %dMb of memory', (time() - $start_date), $row, (memory_get_peak_usage(false)/1024/1024));
 			die;
 		}
 	}
