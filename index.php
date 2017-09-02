@@ -56,7 +56,12 @@ function prepare_multi_insert_data($keys, $values) {
 require_once $_SERVER["DOCUMENT_ROOT"] . '/inc/connect.php';
 
 $content_dir = 'wp-content/uploads';
-$current_dir = sprintf('wp-content/uploads/%d/%s', date('Y'), date('m'));
+$images_dir = $content_dir . '/wc-fast-import';
+$current_dir = sprintf('/var/www/vhosts/works/htdocs/courses/wp-content/uploads/%d/%s', date('Y'), date('m'));
+if (!file_exists($images_dir)) {
+	mkdir($images_dir, 0777, true);
+}
+
 if (!file_exists($current_dir)) {
 	mkdir($current_dir, 0777, true);
 }
@@ -117,6 +122,20 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 				'_sale_price'			=> $data[7] - 10,
 				'_sku'					=> $data[2],
 			);
+			
+			//Collect post gallery images and download images, if needed
+			if (!empty($data[31])) {
+				$images = explode('|', $data[31]);
+				foreach ($images as $image) {
+					if (!file_exists($images_dir . '/' . basename($image))) {
+						$image_contents = file_get_contents($image);
+						file_put_contents($current_dir . '/' . basename($image), $image_contents);
+					} else {
+						rename($images_dir . '/' . basename($image), $current_dir . '/' . basename($image));
+					}
+					$post_data['images'][$sku][] = $image;
+				}
+			}
 			
 			//Collect category data
 			$category_slug = convert_to_slug($data[10]);
@@ -246,8 +265,8 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 		}
 		$row++;
 		
-		if ($row > 1000) {
-			//err($post_data);
+		if ($row > 10) {
+			//err($post_data['images']);
 			//Insert our rows
 			$post_insert_data = prepare_multi_insert_data($post_fields, $post_data['posts']);
 			$pdo->beginTransaction();				
@@ -567,7 +586,219 @@ if ( ( $handle = fopen( 'feed_import_simple.csv', 'r' ) ) !== FALSE ) {
 				echo $e->getMessage() . '<br />';
 			}
 			$pdo->commit();
+			
+			//Insert gallery images
+			$image_data = $images_names = $images_meta = $removed_images_names = array();
+			foreach ($post_data['images'] as $sku => $images) {
+				foreach ($images as $image) {
+					//Skip same image names to prevent duplicating
+					$found = 0;
+					foreach ($image_data as $single_image) {
+						if ($single_image['post_name'] == basename($image)) {
+							$found = 1;
+						}
+					}
+					
+					if ($found == 1) {
+						continue;
+					}
+					
+					$image_data[] = array(
+						"post_author" => "1",
+						"post_date" => date("Y-m-d H:i:s", time()),
+						"post_date_gmt" => date("Y-m-d H:i:s", time()),
+						"post_content" => "",
+						"post_title" => basename($image),
+						"post_excerpt" => "",
+						"post_status" => "inherit",
+						"comment_status" => "open",
+						"ping_status" => "closed",
+						"post_password" => "",
+						"post_name" => basename($image),
+						"to_ping" => "",
+						"pinged" => "",
+						"post_modified" => "",
+						"post_modified_gmt" => "",
+						"post_content_filtered" => "",
+						"post_parent" => $skus[$sku],
+						"guid" => "http://courses.works/product/" . convert_to_slug($post_data['posts'][$sku][4]) . "/" . basename($image) . "/",
+						"menu_order" => "",
+						"post_type" => "attachment",
+						"post_mime_type" => mime_content_type($current_dir . '/' . basename($image)),
+						"comment_count" => ""
+					);
+					$images_names[basename($image)] = basename($image);
+				}
+			}
 
+			$images_insert_data = prepare_multi_insert_data(array_keys(reset($image_data)), $image_data);
+			$pdo->beginTransaction();				
+/* I */		$sql = 'INSERT INTO wp_posts (' . implode(', ', array_keys(reset($image_data))) . ') VALUES ' . $images_insert_data['args'];
+			$stmt = $pdo->prepare($sql);
+			try {
+				$stmt->execute($images_insert_data['values']);
+			} catch (PDOException $e){
+				echo $e->getMessage() . '<br />';
+			}
+			$pdo->commit();
+			
+			//Select inserted images and map image to post_id
+			$sql = 'SELECT ID, post_name FROM wp_posts WHERE post_name IN(' . substr(str_repeat(', ?', count(array_keys($images_names))), 2) . ')';
+			$stmt = $pdo->prepare($sql);
+			$stmt->execute(array_values($images_names));
+			$gallery_images = $product_thumbnails = array();
+			while ($res = $stmt->fetch()) {
+				if (isset($images_names[$res['post_name']])) {
+					$images_names[$res['post_name']] = (int)$res['ID'];
+					foreach ($post_data['images'] as $sku => $images) {
+						foreach ($images as $image) {
+							if (basename($image) == $res['post_name']) {						
+								if (!isset($product_thumbnails[$sku])) {
+									$product_thumbnails[$sku] = (int)$res['ID'];
+									$images_meta[] = array(
+										'post_id'		=> $skus[$sku],
+										'meta_key'		=> '_thumbnail_id',
+										'meta_value'	=> (int)$res['ID']
+									);
+									$images_meta[] = array(
+										'post_id'		=> (int)$res['ID'],
+										'meta_key'		=> '_wp_attached_file',
+										'meta_value'	=> $current_dir . '/' . basename($image),
+									);
+									
+									//Get image sizes
+									list($width, $height) = getImageSize($current_dir . '/' . basename($image));
+									$images_meta[] = array(
+										'post_id'		=> (int)$res['ID'],
+										'meta_key'		=> '_wp_attachment_metadata',
+										'meta_value'	=> serialize(array (
+											'width' => $width,
+											'height' => $height,
+											'file' => $current_dir . '/' . basename($image),
+											'shop_thumbnail' => array (
+												'file' => basename($image),
+												'width' => 180,
+												'height' => 180,
+												'mime-type' => mime_content_type($current_dir . '/' . basename($image)),
+											),
+											'shop_catalog' => array (
+												'file' => basename($image),
+												'width' => 300,
+												'height' => 300,
+												'mime-type' => mime_content_type($current_dir . '/' . basename($image)),
+											),
+											'shop_single' => array (
+												'file' => basename($image),
+												'width' => 600,
+												'height' => 600,
+												'mime-type' => mime_content_type($current_dir . '/' . basename($image)),
+											),
+											'image_meta' => array(
+												'aperture' => 0,
+												'credit' => '',
+												'camera' => '',
+												'caption' => '',
+												'created_timestamp' => 0,
+												'copyright' => '',
+												'focal_length' => 0,
+												'iso' => 0,
+												'shutter_speed' => 0,
+												'title' => '',
+												'orientation' => 0,
+												'keywords' => array()
+											)
+										))
+									);
+								} else {
+									$gallery_images[$sku][(int)$res['ID']] = $res['post_name'];
+								}
+							}
+						}
+					}
+				} else {
+					$removed_images_names[] = $images_names[$res['post_name']];
+					unset($images_names[$res['post_name']]);
+				}
+			}
+			
+			//Fill meta with images data
+			foreach ($gallery_images as $sku => $images) {
+				foreach ($images as $image_id => $image_name) {
+					$images_meta[] = array(
+						'post_id'		=> $skus[$sku],
+						'meta_key'		=> '_thumbnail_id',
+						'meta_value'	=> $image_id
+					);
+					$images_meta[] = array(
+						'post_id'		=> $image_id,
+						'meta_key'		=> '_wp_attached_file',
+						'meta_value'	=> $current_dir . '/' . $image_name,
+					);
+					
+					//Get image sizes
+					list($width, $height) = getImageSize($current_dir . '/' . $image_name);
+					$images_meta[] = array(
+						'post_id'		=> $image_id,
+						'meta_key'		=> '_wp_attachment_metadata',
+						'meta_value'	=> serialize(array (
+							'width' => $width,
+							'height' => $height,
+							'file' => $current_dir . '/' . $image_name,
+							'shop_thumbnail' => array (
+								'file' => $image_name,
+								'width' => 180,
+								'height' => 180,
+								'mime-type' => mime_content_type($current_dir . '/' . $image_name),
+							),
+							'shop_catalog' => array (
+								'file' => $image_name,
+								'width' => 300,
+								'height' => 300,
+								'mime-type' => mime_content_type($current_dir . '/' . $image_name),
+							),
+							'shop_single' => array (
+								'file' => $image_name,
+								'width' => 600,
+								'height' => 600,
+								'mime-type' => mime_content_type($current_dir . '/' . $image_name),
+							),
+							'image_meta' => array(
+								'aperture' => 0,
+								'credit' => '',
+								'camera' => '',
+								'caption' => '',
+								'created_timestamp' => 0,
+								'copyright' => '',
+								'focal_length' => 0,
+								'iso' => 0,
+								'shutter_speed' => 0,
+								'title' => '',
+								'orientation' => 0,
+								'keywords' => array()
+							)
+						))
+					);
+				}
+				$images_meta[] = array(
+					'post_id'		=> $skus[$sku],
+					'meta_key'		=> '_product_image_gallery',
+					'meta_value'	=> implode(',', array_keys($images))
+				);
+			}
+
+
+			//Add images meta
+			$images_insert_data = prepare_multi_insert_data(array_keys(reset($images_meta)), $images_meta);
+			$pdo->beginTransaction();				
+/* I */		$sql = 'INSERT INTO wp_postmeta (' . implode(', ', array_keys(reset($images_meta))) . ') VALUES ' . $images_insert_data['args'];
+			$stmt = $pdo->prepare($sql);
+			try {
+				$stmt->execute($images_insert_data['values']);
+			} catch (PDOException $e){
+				echo $e->getMessage() . '<br />';
+			}
+			$pdo->commit();
+			
 			//Print execution time
 			printf('Executed in %d seconds. %d rows processed. Used %dMb of memory', (time() - $start_date), $row, (memory_get_peak_usage(false)/1024/1024));
 			die;
@@ -582,6 +813,14 @@ echo 'done';
 
 
 
+
+
+//_product_image_gallery gallery
+//_wp_attached_file thumbnail
+//_wp_attachment_metadata thumbnail
+//_size_w
+//_size_h
+//_image_size
 
 
 
